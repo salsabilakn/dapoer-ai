@@ -1,139 +1,150 @@
+# ===== AUTO-INSTALL JIKA BELUM ADA =====
+import os
+import subprocess
+import importlib.util
+
+def install(package):
+    subprocess.call(["pip", "install", package])
+
+# Paket wajib
+for pkg in ["streamlit", "pandas", "scikit-learn"]:
+    if importlib.util.find_spec(pkg) is None:
+        install(pkg)
+
+# Paket opsional (Gemini)
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    USE_GEMINI = True
+except ImportError:
+    USE_GEMINI = False
+    try:
+        install("langchain-google-genai")
+        install("langchain")
+        USE_GEMINI = True
+    except:
+        pass
+
+# ====== APP LOGIC ======
 import streamlit as st
 import pandas as pd
 import re
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import Tool, initialize_agent
-from langchain.memory import ConversationBufferMemory
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# --- SETUP FILE CSV ---
-CSV_FILE_PATH = 'https://raw.githubusercontent.com/audreeynr/dapoer-ai/refs/heads/main/data/Indonesian_Food_Recipes.csv'
+# Optional Gemini
+if USE_GEMINI:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain.chains import ConversationChain
+    from langchain.memory import ConversationBufferMemory
 
-# Load data
-df = pd.read_csv(CSV_FILE_PATH)
-df = df.dropna(subset=['Title', 'Ingredients', 'Steps']).drop_duplicates()
+@st.cache_data
+def load_data():
+    url = "https://raw.githubusercontent.com/audreeynr/dapoer-ai/main/data/Indonesian_Food_Recipes.csv"
+    df = pd.read_csv(url).dropna(subset=['Title', 'Ingredients', 'Steps']).drop_duplicates()
+    df["Title_Norm"] = df["Title"].str.lower().str.replace(r'[^a-z0-9\s]', '', regex=True)
+    df["Ingredients_Norm"] = df["Ingredients"].str.lower().str.replace(r'[^a-z0-9\s]', '', regex=True)
+    df["Steps_Norm"] = df["Steps"].str.lower().str.replace(r'[^a-z0-9\s]', '', regex=True)
+    return df
 
-# Normalisasi teks
-def normalize_text(text):
-    if isinstance(text, str):
-        text = text.lower()
-        text = re.sub(r'[^a-z0-9\s]', '', text)
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
-    return text
+df = load_data()
 
-df['Title_Normalized'] = df['Title'].apply(normalize_text)
-df['Ingredients_Normalized'] = df['Ingredients'].apply(normalize_text)
-df['Steps_Normalized'] = df['Steps'].apply(normalize_text)
-
-# Format output resep
 def format_recipe(row):
-    bahan = re.split(r'\n|--|,', row['Ingredients'])
-    bahan_list = [b.strip().capitalize() for b in bahan if b.strip()]
-    langkah = row['Steps'].strip()
+    bahan_list = [f"- {b.strip().capitalize()}" for b in re.split(r'\n|,|--', row['Ingredients']) if b.strip()]
     return f"""🍽 **{row['Title']}**
 
 **Bahan-bahan:**  
-- {"\n- ".join(bahan_list)}
+{chr(10).join(bahan_list)}
 
-**Langkah Memasak:**  
-{langkah}"""
+**Langkah-langkah:**  
+{row['Steps'].strip()}"""
 
-# Tool 1: Berdasarkan judul
 def search_by_title(query):
-    q = normalize_text(query)
-    match = df[df['Title_Normalized'].str.contains(q)]
-    if not match.empty:
-        return format_recipe(match.iloc[0])
-    return "❌ Resep tidak ditemukan berdasarkan judul."
+    q = re.sub(r'[^a-z0-9\s]', '', query.lower())
+    match = df[df["Title_Norm"].str.contains(q)]
+    return format_recipe(match.iloc[0]) if not match.empty else "❌ Resep tidak ditemukan."
 
-# Tool 2: Berdasarkan bahan
-def search_by_ingredients(query):
-    stopwords = {"masakan", "apa", "saja", "yang", "bisa", "dibuat", "dari", "menggunakan", "bahan", "resep"}
-    tokens = [w for w in normalize_text(query).split() if w not in stopwords and len(w) > 2]
-    mask = df['Ingredients_Normalized'].apply(lambda x: all(k in x for k in tokens))
-    hasil = df[mask]
-    if not hasil.empty:
-        return "Masakan dengan bahan tersebut:\n- " + "\n- ".join(hasil.head(5)['Title'].tolist())
-    return "❌ Tidak ditemukan masakan dengan bahan tersebut."
+def search_by_ingredient(query):
+    q = re.sub(r'[^a-z0-9\s]', '', query.lower())
+    keywords = [w for w in q.split() if len(w) > 2]
+    result = df[df["Ingredients_Norm"].apply(lambda x: all(k in x for k in keywords))]
+    if not result.empty:
+        return "🍳 Masakan dengan bahan tersebut:\n- " + "\n- ".join(result["Title"].head(5))
+    return "❌ Tidak ditemukan masakan dengan bahan itu."
 
-# Tool 3: Berdasarkan metode masak
 def search_by_method(query):
-    q = normalize_text(query)
-    for metode in ['goreng', 'panggang', 'rebus', 'kukus']:
-        if metode in q:
-            cocok = df[df['Steps_Normalized'].str.contains(metode)]
-            if not cocok.empty:
-                return f"Masakan dimasak dengan cara {metode}:\n- " + "\n- ".join(cocok.head(5)['Title'].tolist())
-    return "❌ Tidak ditemukan metode memasak yang cocok."
+    q = query.lower()
+    for method in ["goreng", "rebus", "panggang", "kukus"]:
+        if method in q:
+            result = df[df["Steps_Norm"].str.contains(method)]
+            if not result.empty:
+                return f"🔥 Masakan dengan cara {method}:\n- " + "\n- ".join(result["Title"].head(5))
+    return "❌ Tidak ditemukan metode memasak."
 
-# Tool 4: Masakan mudah
-def recommend_easy_recipes(query):
-    if "mudah" in query.lower() or "pemula" in query.lower():
-        hasil = df[df['Steps'].str.len() < 300].head(5)['Title'].tolist()
-        return "Rekomendasi masakan mudah:\n- " + "\n- ".join(hasil)
-    return "❌ Tidak ditemukan masakan mudah yang cocok."
+def recommend_easy():
+    short_steps = df[df["Steps"].str.len() < 300]
+    return "✨ Rekomendasi masakan mudah:\n- " + "\n- ".join(short_steps["Title"].head(5))
 
-# Agent Langchain
-def create_agent(api_key):
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
-        google_api_key=api_key,
-        temperature=0.7
-    )
+def tfidf_search(query):
+    corpus = df["Title"] + ". " + df["Ingredients"] + ". " + df["Steps"]
+    vectorizer = TfidfVectorizer().fit_transform(corpus)
+    q_vec = TfidfVectorizer().fit(corpus).transform([query])
+    sims = cosine_similarity(q_vec, vectorizer).flatten()
+    idx = np.argmax(sims)
+    if sims[idx] > 0.1:
+        return format_recipe(df.iloc[idx])
+    return "❌ Tidak ditemukan hasil yang mirip."
 
-    tools = [
-        Tool(name="SearchByTitle", func=search_by_title, description="Cari resep berdasarkan judul masakan."),
-        Tool(name="SearchByIngredients", func=search_by_ingredients, description="Cari masakan berdasarkan bahan."),
-        Tool(name="SearchByMethod", func=search_by_method, description="Cari masakan berdasarkan metode memasak."),
-        Tool(name="RecommendEasyRecipes", func=recommend_easy_recipes, description="Rekomendasi masakan yang mudah dibuat.")
-    ]
+@st.cache_resource
+def load_gemini(api_key):
+    memory = ConversationBufferMemory()
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key)
+    return ConversationChain(llm=llm, memory=memory)
 
-    memory = ConversationBufferMemory(memory_key="chat_history")
+# ==== STREAMLIT UI ====
+st.set_page_config(page_title="Dapoer-AI Hybrid", page_icon="🍲")
+st.title("🍛 Dapoer-AI (Offline + Opsional Gemini)")
 
-    return initialize_agent(
-        tools=tools,
-        llm=llm,
-        agent="zero-shot-react-description",
-        memory=memory,
-        verbose=False
-    )
+use_gemini = False
+if USE_GEMINI:
+    api_key = st.text_input("🔑 Masukkan Gemini API Key (opsional):", type="password")
+    if api_key:
+        try:
+            gemini = load_gemini(api_key)
+            use_gemini = True
+            st.success("✅ Gemini aktif!")
+        except:
+            st.warning("❌ API Key salah atau limit habis.")
 
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="Dapoer-AI", page_icon="🍲")
-st.title("🍛 Dapoer-AI - Asisten Resep Masakan Indonesia")
+if "chat" not in st.session_state:
+    st.session_state.chat = [{"role": "assistant", "content": "👋 Hai! Mau masak apa hari ini?"}]
 
-# API Key input
-GOOGLE_API_KEY = st.text_input("Masukkan API Key Gemini kamu:", type="password")
-if not GOOGLE_API_KEY:
-    st.warning("Silakan masukkan API key untuk mulai.")
-    st.stop()
-
-agent = create_agent(GOOGLE_API_KEY)
-
-# Inisialisasi chat memory
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-    st.session_state.messages.append({"role": "assistant", "content": "👋 Hai! Mau masak apa hari ini?"})
-
-# Tampilkan riwayat chat
-for msg in st.session_state.messages:
+for msg in st.session_state.chat:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Input chat
-if prompt := st.chat_input("Tanyakan resep, bahan, atau metode memasak..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+if prompt := st.chat_input("Tanyakan resep, bahan, atau masakan..."):
+    st.session_state.chat.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
+        response = ""
         try:
-            response = agent.run(prompt)
-        except Exception as e:
-            if "quota" in str(e).lower() or "429" in str(e):
-                response = "⚠️ Kuota API kamu udah habis. Coba lagi besok atau pakai API Key lain."
+            if "judul" in prompt.lower():
+                response = search_by_title(prompt)
+            elif "bahan" in prompt.lower():
+                response = search_by_ingredient(prompt)
+            elif any(m in prompt.lower() for m in ["goreng", "panggang", "kukus", "rebus"]):
+                response = search_by_method(prompt)
+            elif "mudah" in prompt.lower() or "pemula" in prompt.lower():
+                response = recommend_easy()
+            elif use_gemini:
+                response = gemini.run(prompt)
             else:
-                response = f"❌ Error: {e}"
+                response = tfidf_search(prompt)
+        except Exception as e:
+            response = f"❌ Error: {e}"
 
         st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.chat.append({"role": "assistant", "content": response})
