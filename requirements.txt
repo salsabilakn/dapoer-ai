@@ -2,4 +2,3 @@ streamlit
 pandas
 langchain
 langchain-google-genai
-faiss-cpu==1.7.4
