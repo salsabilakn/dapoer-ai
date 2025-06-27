@@ -6,6 +6,7 @@ from langchain.memory import ConversationBufferMemory
 
 # Load data
 CSV_FILE_PATH = 'https://raw.githubusercontent.com/salsabilakn/dapoer-ai/main/Indonesian_Food_Recipes.csv'
+st.write("🔍 Load CSV dari:", CSV_FILE_PATH)
 df = pd.read_csv(CSV_FILE_PATH)
 df = df.dropna(subset=['Title', 'Ingredients', 'Steps']).drop_duplicates()
 
