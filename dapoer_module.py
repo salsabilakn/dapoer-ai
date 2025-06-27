@@ -1,5 +1,6 @@
 import pandas as pd
 import re
+import langchain.vectorstores.faiss  # ⬅️ paksa import modul FAISS
 from langchain.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
