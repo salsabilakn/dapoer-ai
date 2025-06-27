@@ -1,11 +1,6 @@
 import streamlit as st
 import pandas as pd
 import re
-from functools import lru_cache
-from langchain.vectorstores import FAISS
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.schema import Document
 from langchain.agents import Tool, initialize_agent
 from langchain.memory import ConversationBufferMemory
 
@@ -62,30 +57,14 @@ def recommend_easy_recipes(query):
         return "👍 Rekomendasi masakan mudah:\n- " + "\n- ".join(match.head(5)['Title'])
     return "❌ Tidak ditemukan masakan mudah yang relevan."
 
-@lru_cache(maxsize=1)
-def build_vectorstore(api_key):
-    docs = [Document(page_content=f"Title: {r['Title']}\nIngredients: {r['Ingredients']}\nSteps: {r['Steps']}") for _, r in df.iterrows()]
-    chunks = CharacterTextSplitter(chunk_size=300, chunk_overlap=30).split_documents(docs)
-    embeddings = GoogleGenerativeAIEmbeddings(google_api_key=api_key)
-    return FAISS.from_documents(chunks, embeddings)
-
-def rag_search(api_key, query):
-    retriever = build_vectorstore(api_key).as_retriever()
-    docs = retriever.get_relevant_documents(query)
-    if not docs:
-        fallback = df.sample(3)
-        return "🤷‍♂️ Tidak ditemukan yang cocok. Coba ini:\n\n" + "\n\n".join([format_recipe(r) for _, r in fallback.iterrows()])
-    return "\n\n".join([doc.page_content for doc in docs[:3]])
-
 def create_agent(api_key):
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.7)
     tools = [
-        Tool(name="SearchByTitle", func=search_by_title, description="Cari resep berdasarkan judul masakan."),
-        Tool(name="SearchByIngredients", func=search_by_ingredients, description="Cari masakan berdasarkan bahan."),
-        Tool(name="SearchByMethod", func=search_by_method, description="Cari masakan berdasarkan metode."),
-        Tool(name="RecommendEasyRecipes", func=recommend_easy_recipes, description="Rekomendasi masakan mudah."),
-        Tool(name="RAGSearch", func=lambda q: rag_search(api_key, q), description="Cari pakai RAG dan vectorstore."),
-    ]
+    Tool(name="SearchByTitle", func=search_by_title, description="Cari resep berdasarkan judul masakan."),
+    Tool(name="SearchByIngredients", func=search_by_ingredients, description="Cari masakan berdasarkan bahan."),
+    Tool(name="SearchByMethod", func=search_by_method, description="Cari masakan berdasarkan metode memasak."),
+    Tool(name="RecommendEasyRecipes", func=recommend_easy_recipes, description="Rekomendasi masakan yang mudah dibuat.")
+]
     memory = ConversationBufferMemory(memory_key="chat_history")
     return initialize_agent(tools, llm, agent="zero-shot-react-description", memory=memory, verbose=False)
 
