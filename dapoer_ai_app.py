@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
+import time
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import Tool, initialize_agent
 from langchain.memory import ConversationBufferMemory
@@ -60,15 +61,35 @@ def recommend_easy_recipes(query):
     return "❌ Tidak ditemukan masakan mudah yang relevan."
 
 def create_agent(api_key):
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0.7)
-    tools = [
-    Tool(name="SearchByTitle", func=search_by_title, description="Cari resep berdasarkan judul masakan."),
-    Tool(name="SearchByIngredients", func=search_by_ingredients, description="Cari masakan berdasarkan bahan."),
-    Tool(name="SearchByMethod", func=search_by_method, description="Cari masakan berdasarkan metode memasak."),
-    Tool(name="RecommendEasyRecipes", func=recommend_easy_recipes, description="Rekomendasi masakan yang mudah dibuat.")
-]
-    memory = ConversationBufferMemory(memory_key="chat_history")
-    return initialize_agent(tools, llm, agent="zero-shot-react-description", memory=memory, verbose=False)
+    # Coba 3x kalau error 429
+    for _ in range(3):
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-1.5-flash",
+                google_api_key=api_key,
+                temperature=0.7
+            )
+            tools = [
+                Tool(name="SearchByTitle", func=search_by_title, description="Cari resep berdasarkan judul masakan."),
+                Tool(name="SearchByIngredients", func=search_by_ingredients, description="Cari masakan berdasarkan bahan."),
+                Tool(name="SearchByMethod", func=search_by_method, description="Cari masakan berdasarkan metode memasak."),
+                Tool(name="RecommendEasyRecipes", func=recommend_easy_recipes, description="Rekomendasi masakan yang mudah dibuat.")
+            ]
+            memory = ConversationBufferMemory(memory_key="chat_history")
+            agent = initialize_agent(
+                tools=tools,
+                llm=llm,
+                agent="zero-shot-react-description",
+                memory=memory,
+                verbose=False
+            )
+            return agent
+        except Exception as e:
+            if "429" in str(e):
+                time.sleep(20)  # tunggu 20 detik terus coba lagi
+            else:
+                raise e
+    raise Exception("Gagal membuat agent setelah 3 kali percobaan karena quota limit.")
 
 # ================== STREAMLIT ==================
 
