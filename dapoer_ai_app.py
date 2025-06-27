@@ -1,11 +1,14 @@
 # dapoer_ai_final.py
 
+import os
 import streamlit as st
 import pandas as pd
 import re
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+except ImportError:
+    os.system('pip install scikit-learn')
+    from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Coba import Gemini (jika ada)
 try:
