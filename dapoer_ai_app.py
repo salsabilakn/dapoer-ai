@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import Tool, initialize_agent
 from langchain.memory import ConversationBufferMemory
 
