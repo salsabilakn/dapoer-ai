@@ -3,4 +3,6 @@ pandas
 scikit-learn
 langchain
 langchain-google-genai
-google-generativeai
+langchain==0.1.14
+faiss-cpu==1.7.4
+faiss-cpu
