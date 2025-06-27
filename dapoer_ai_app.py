@@ -1,14 +1,14 @@
 import streamlit as st
 import pandas as pd
 import re
-import time
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import Tool, initialize_agent
 from langchain.memory import ConversationBufferMemory
 
-# Load data
+# --- SETUP FILE CSV ---
 CSV_FILE_PATH = 'https://raw.githubusercontent.com/audreeynr/dapoer-ai/refs/heads/main/data/Indonesian_Food_Recipes.csv'
-st.write("🔍 Load CSV dari:", CSV_FILE_PATH)
+
+# Load data
 df = pd.read_csv(CSV_FILE_PATH)
 df = df.dropna(subset=['Title', 'Ingredients', 'Steps']).drop_duplicates()
 
@@ -25,100 +25,115 @@ df['Title_Normalized'] = df['Title'].apply(normalize_text)
 df['Ingredients_Normalized'] = df['Ingredients'].apply(normalize_text)
 df['Steps_Normalized'] = df['Steps'].apply(normalize_text)
 
-# Format resep
+# Format output resep
 def format_recipe(row):
-    bahan_list = [b.strip().capitalize() for b in re.split(r'\n|--|,', row['Ingredients']) if b.strip()]
-    bahan_md = "\n".join(f"- {b}" for b in bahan_list)
-    langkah_md = row['Steps'].strip()
-    return f"""🍽 {row['Title']}\n\n**Bahan-bahan:**\n{bahan_md}\n\n**Langkah Memasak:**\n{langkah_md}"""
+    bahan = re.split(r'\n|--|,', row['Ingredients'])
+    bahan_list = [b.strip().capitalize() for b in bahan if b.strip()]
+    langkah = row['Steps'].strip()
+    return f"""🍽 **{row['Title']}**
 
-# Tools
+**Bahan-bahan:**  
+- {"\n- ".join(bahan_list)}
+
+**Langkah Memasak:**  
+{langkah}"""
+
+# Tool 1: Berdasarkan judul
 def search_by_title(query):
-    query = normalize_text(query)
-    match = df[df['Title_Normalized'].str.contains(query)]
-    return format_recipe(match.iloc[0]) if not match.empty else "❌ Resep tidak ditemukan berdasarkan judul."
+    q = normalize_text(query)
+    match = df[df['Title_Normalized'].str.contains(q)]
+    if not match.empty:
+        return format_recipe(match.iloc[0])
+    return "❌ Resep tidak ditemukan berdasarkan judul."
 
+# Tool 2: Berdasarkan bahan
 def search_by_ingredients(query):
     stopwords = {"masakan", "apa", "saja", "yang", "bisa", "dibuat", "dari", "menggunakan", "bahan", "resep"}
-    keywords = [w for w in normalize_text(query).split() if w not in stopwords and len(w) > 2]
-    if keywords:
-        mask = df['Ingredients_Normalized'].apply(lambda x: all(k in x for k in keywords))
-        match = df[mask]
-        return "🍽 Masakan dengan bahan tersebut:\n- " + "\n- ".join(match.head(5)['Title']) if not match.empty else "❌ Tidak ditemukan masakan dengan bahan itu."
-    return "⚠️ Masukkan bahan yang lebih spesifik."
+    tokens = [w for w in normalize_text(query).split() if w not in stopwords and len(w) > 2]
+    mask = df['Ingredients_Normalized'].apply(lambda x: all(k in x for k in tokens))
+    hasil = df[mask]
+    if not hasil.empty:
+        return "Masakan dengan bahan tersebut:\n- " + "\n- ".join(hasil.head(5)['Title'].tolist())
+    return "❌ Tidak ditemukan masakan dengan bahan tersebut."
 
+# Tool 3: Berdasarkan metode masak
 def search_by_method(query):
+    q = normalize_text(query)
     for metode in ['goreng', 'panggang', 'rebus', 'kukus']:
-        if metode in normalize_text(query):
-            match = df[df['Steps_Normalized'].str.contains(metode)]
-            return f"🔥 Masakan dimasak dengan cara {metode}:\n- " + "\n- ".join(match.head(5)['Title']) if not match.empty else f"❌ Tidak ditemukan masakan dengan metode {metode}."
-    return "⚠️ Tidak ada metode masak yang cocok ditemukan."
+        if metode in q:
+            cocok = df[df['Steps_Normalized'].str.contains(metode)]
+            if not cocok.empty:
+                return f"Masakan dimasak dengan cara {metode}:\n- " + "\n- ".join(cocok.head(5)['Title'].tolist())
+    return "❌ Tidak ditemukan metode memasak yang cocok."
 
+# Tool 4: Masakan mudah
 def recommend_easy_recipes(query):
-    if any(k in normalize_text(query) for k in ['mudah', 'pemula', 'cepat']):
-        match = df[df['Steps'].str.len() < 300]
-        return "👍 Rekomendasi masakan mudah:\n- " + "\n- ".join(match.head(5)['Title'])
-    return "❌ Tidak ditemukan masakan mudah yang relevan."
+    if "mudah" in query.lower() or "pemula" in query.lower():
+        hasil = df[df['Steps'].str.len() < 300].head(5)['Title'].tolist()
+        return "Rekomendasi masakan mudah:\n- " + "\n- ".join(hasil)
+    return "❌ Tidak ditemukan masakan mudah yang cocok."
 
+# Agent Langchain
 def create_agent(api_key):
-    # Coba 3x kalau error 429
-    for _ in range(3):
-        try:
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
-                google_api_key=api_key,
-                temperature=0.7
-            )
-            tools = [
-                Tool(name="SearchByTitle", func=search_by_title, description="Cari resep berdasarkan judul masakan."),
-                Tool(name="SearchByIngredients", func=search_by_ingredients, description="Cari masakan berdasarkan bahan."),
-                Tool(name="SearchByMethod", func=search_by_method, description="Cari masakan berdasarkan metode memasak."),
-                Tool(name="RecommendEasyRecipes", func=recommend_easy_recipes, description="Rekomendasi masakan yang mudah dibuat.")
-            ]
-            memory = ConversationBufferMemory(memory_key="chat_history")
-            agent = initialize_agent(
-                tools=tools,
-                llm=llm,
-                agent="zero-shot-react-description",
-                memory=memory,
-                verbose=False
-            )
-            return agent
-        except Exception as e:
-            if "429" in str(e):
-                time.sleep(20)  # tunggu 20 detik terus coba lagi
-            else:
-                raise e
-    raise Exception("Gagal membuat agent setelah 3 kali percobaan karena quota limit.")
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        google_api_key=api_key,
+        temperature=0.7
+    )
 
-# ================== STREAMLIT ==================
+    tools = [
+        Tool(name="SearchByTitle", func=search_by_title, description="Cari resep berdasarkan judul masakan."),
+        Tool(name="SearchByIngredients", func=search_by_ingredients, description="Cari masakan berdasarkan bahan."),
+        Tool(name="SearchByMethod", func=search_by_method, description="Cari masakan berdasarkan metode memasak."),
+        Tool(name="RecommendEasyRecipes", func=recommend_easy_recipes, description="Rekomendasi masakan yang mudah dibuat.")
+    ]
 
+    memory = ConversationBufferMemory(memory_key="chat_history")
+
+    return initialize_agent(
+        tools=tools,
+        llm=llm,
+        agent="zero-shot-react-description",
+        memory=memory,
+        verbose=False
+    )
+
+# --- STREAMLIT UI ---
 st.set_page_config(page_title="Dapoer-AI", page_icon="🍲")
 st.title("🍛 Dapoer-AI - Asisten Resep Masakan Indonesia")
 
-api_key = st.text_input("🔑 Masukkan API Key Gemini kamu:", type="password")
-if not api_key:
-    st.warning("Masukkan API key dulu biar bisa jalanin aplikasi.")
+# API Key input
+GOOGLE_API_KEY = st.text_input("Masukkan API Key Gemini kamu:", type="password")
+if not GOOGLE_API_KEY:
+    st.warning("Silakan masukkan API key untuk mulai.")
     st.stop()
 
-@st.cache_resource
-def get_agent(api_key): return create_agent(api_key)
-agent = get_agent(api_key)
+agent = create_agent(GOOGLE_API_KEY)
 
+# Inisialisasi chat memory
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "👋 Hai! Mau masak apa hari ini?"}]
+    st.session_state.messages = []
+    st.session_state.messages.append({"role": "assistant", "content": "👋 Hai! Mau masak apa hari ini?"})
 
+# Tampilkan riwayat chat
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+# Input chat
 if prompt := st.chat_input("Tanyakan resep, bahan, atau metode memasak..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"): st.markdown(prompt)
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
     with st.chat_message("assistant"):
         try:
             response = agent.run(prompt)
         except Exception as e:
-            response = f"⚠️ Terjadi error: {str(e)}"
+            if "quota" in str(e).lower() or "429" in str(e):
+                response = "⚠️ Kuota API kamu udah habis. Coba lagi besok atau pakai API Key lain."
+            else:
+                response = f"❌ Error: {e}"
+
         st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
