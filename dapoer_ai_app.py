@@ -1,3 +1,5 @@
+pip install scikit-learn
+pip install streamlit pandas scikit-learn langchain langchain-google-genai
 # ===== AUTO-INSTALL JIKA BELUM ADA =====
 import os
 import subprocess
