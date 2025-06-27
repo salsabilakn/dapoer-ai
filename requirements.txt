@@ -1,6 +1,6 @@
 streamlit
 pandas
 scikit-learn
-langchain==0.1.14
+langchain
 langchain-google-genai
-faiss-cpu
+google-generativeai
